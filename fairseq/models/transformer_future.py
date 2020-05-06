@@ -423,7 +423,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
         self._future_mask = torch.empty(0)
-
+        self.bos = dictionary.bos()
         self.dropout = args.dropout
         self.decoder_layerdrop = args.decoder_layerdrop
         self.share_input_output_embed = args.share_decoder_input_output_embed
@@ -643,13 +643,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             prev_F_i = self.get_incremental_state(incremental_state, 'prev_F')
             if prev_F_i is None:
                 # 第0个单词，没有prev_F,所以生成F0
-                emb_y_i = self.embed_tokens.weight[0]
+                emb_y_i = self.embed_tokens.weight[self.bos]
                 Hi = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
                 R_i = torch.sigmoid(self.w_r(emb_y_i) + self.u_r(Hi))
                 Z_i = torch.sigmoid(self.w_z(emb_y_i) + self.u_z(Hi))
                 S_i = torch.relu(self.w(emb_y_i) + self.u(R_i * Hi))
                 prev_F_i = Z_i * S_i + (1 - Z_i) * Hi
-            Hi = features[:, 0, :] # 之前这里多了一个else，导致H0不对
+            Hi = features[:, 0, :]  # 之前这里多了一个else，导致H0不对
             g_i = torch.sigmoid(self.g(torch.cat([Hi, prev_F_i], dim=1)))
             H_i_head = Hi + g_i * prev_F_i
             # 用H_i_head计算出当前step的词
@@ -670,7 +670,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             if i == 0:
                 # 计算第一个output(y_0)的时候所需要的Prev_F
                 # 计算F(-1)时所需要embedding和Hi，分别是<s>的embedding和encoder output的mean
-                emb_y_i = self.embed_tokens.weight[0]
+                emb_y_i = self.embed_tokens.weight[self.bos]
                 Hi = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
             # R_i: Si的一个gate，Z_i:Fi的gate, S_i: Fi的一部分，这的Fi是前一个step的Fi（F_i-1)
             # 由于是for循环，这里的Hi和emb_yi实际上是上一个step的，严格来写应该是H_i-1和y_i-1,得到的F是Fi-1
