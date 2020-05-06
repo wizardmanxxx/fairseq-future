@@ -199,6 +199,7 @@ class FutureTransformerModel(FairseqEncoderDecoderModel):
             src_tokens,
             src_lengths,
             prev_output_tokens,
+            target=None,
             cls_input: Optional[Tensor] = None,
             return_all_hiddens: bool = True,
             features_only: bool = False,
@@ -223,6 +224,7 @@ class FutureTransformerModel(FairseqEncoderDecoderModel):
             features_only=features_only,
             alignment_layer=alignment_layer,
             alignment_heads=alignment_heads,
+            target=target,
             src_lengths=src_lengths,
             return_all_hiddens=return_all_hiddens,
         )
@@ -424,6 +426,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         self.register_buffer("version", torch.Tensor([3]))
         self._future_mask = torch.empty(0)
         self.bos = dictionary.bos()
+        self.eos = dictionary.eos()
+        self.pad = dictionary.pad()
         self.dropout = args.dropout
         self.decoder_layerdrop = args.decoder_layerdrop
         self.share_input_output_embed = args.share_decoder_input_output_embed
@@ -521,6 +525,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             features_only: bool = False,
             alignment_layer: Optional[int] = None,
             alignment_heads: Optional[int] = None,
+            target=None,
             src_lengths: Optional[Any] = None,
             return_all_hiddens: bool = False,
     ):
@@ -532,7 +537,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             alignment_heads=alignment_heads,
         )
         if not features_only:
-            x, fi_word = self.output_layer(x, encoder_out, incremental_state=incremental_state)
+            x, fi_word = self.output_layer(x, encoder_out, target=target, incremental_state=incremental_state)
         return x, (fi_word, extra)
 
     def extract_features(
@@ -637,23 +642,23 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
         return x, {"attn": [attn], "inner_states": inner_states}
 
-    def output_layer(self, features, encoder_out, incremental_state=None):
+    def output_layer(self, features, encoder_out, incremental_state=None, target=None):
         """Project features to the vocabulary size."""
         if incremental_state is not None:
             prev_F_i = self.get_incremental_state(incremental_state, 'prev_F')
             if prev_F_i is None:
                 # 第0个单词，没有prev_F,所以生成F0
-                emb_y_i = self.embed_tokens.weight[self.bos]
-                Hi = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
-                R_i = torch.sigmoid(self.w_r(emb_y_i) + self.u_r(Hi))
-                Z_i = torch.sigmoid(self.w_z(emb_y_i) + self.u_z(Hi))
-                S_i = torch.relu(self.w(emb_y_i) + self.u(R_i * Hi))
-                prev_F_i = Z_i * S_i + (1 - Z_i) * Hi
+                emb_y = self.embed_tokens.weight[self.eos]
+                H = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
+                R_i = torch.sigmoid(self.w_r(emb_y) + self.u_r(H))
+                Z_i = torch.sigmoid(self.w_z(emb_y) + self.u_z(H))
+                S_i = torch.relu(self.w(emb_y) + self.u(R_i * H))
+                prev_F_i = Z_i * S_i + (1 - Z_i) * H
             Hi = features[:, 0, :]  # 之前这里多了一个else，导致H0不对
             g_i = torch.sigmoid(self.g(torch.cat([Hi, prev_F_i], dim=1)))
-            H_i_head = Hi + g_i * prev_F_i
-            # 用H_i_head计算出当前step的词
-            tmp = F.linear(H_i_head, self.embed_tokens.weight)
+            H_i_bar = Hi + g_i * prev_F_i
+            # 用H_i_bar计算出当前step的词
+            tmp = F.linear(torch.tanh(self.w_w(H_i_bar)), self.embed_tokens.weight)
             y_i = torch.max(tmp, dim=1)[1]
             emb_y_i = self.embed_tokens(y_i)
             R_i = torch.sigmoid(self.w_r(emb_y_i) + self.u_r(Hi))
@@ -663,39 +668,24 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self.set_incremental_state(incremental_state, 'prev_F', F_i)
             return tmp[:, None, :], None
         x = features
-        B, L, H = x.size()
-        F_matrix = torch.zeros_like(x).to(x)
-        prob_y_i = torch.zeros(B, L, self.embed_tokens.weight.size(0)).to(x)
-        for i in range(L):
-            if i == 0:
-                # 计算第一个output(y_0)的时候所需要的Prev_F
-                # 计算F(-1)时所需要embedding和Hi，分别是<s>的embedding和encoder output的mean
-                emb_y_i = self.embed_tokens.weight[self.bos]
-                Hi = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
-            # R_i: Si的一个gate，Z_i:Fi的gate, S_i: Fi的一部分，这的Fi是前一个step的Fi（F_i-1)
-            # 由于是for循环，这里的Hi和emb_yi实际上是上一个step的，严格来写应该是H_i-1和y_i-1,得到的F是Fi-1
-            R_i = torch.sigmoid(self.w_r(emb_y_i) + self.u_r(Hi))
-            Z_i = torch.sigmoid(self.w_z(emb_y_i) + self.u_z(Hi))
-            S_i = torch.relu(self.w(emb_y_i) + self.u(R_i * Hi))
-            F_i = Z_i * S_i + (1 - Z_i) * Hi
-            # 将每个F存储到 F_matrix,F_i-1 得到的output实际是y_i(F(-1)得到y0),所以直接放到相应的位置即可。
-            F_matrix[:, i, :] = F_i
-            # 该step的Hi,真正的Hi
-            Hi = x[:, i, :]
-            # 前一个step的Fi-1和当前Hi拼接起来，计算Fi的遗忘门
-            g_i = torch.sigmoid(self.g(torch.cat([Hi, F_i], dim=1)))
-            # 真实要用的Hi(generate word)
-            H_i_head = Hi + g_i * F_i
-            # 利用Hi head生成yi的分布
-            tmp = F.linear(H_i_head, self.embed_tokens.weight)
-            # 将yi的分布保存在prob-y-i的矩阵中
-            prob_y_i[:, i, :] = tmp
-            # 取出改step预测的词和其embedding
-            y_i = torch.max(tmp, dim=1)[1]
-            emb_y_i = self.embed_tokens(y_i)
-        # F0-FN-1 预测出的word
-        fi_word = F.linear(F_matrix, self.embed_tokens.weight)
-        return prob_y_i, fi_word
+        B = x.size(0)
+        emb_y_0 = self.embed_tokens.weight[self.eos]
+        H0 = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
+        target_embedding = self.embed_tokens(target)
+        new_target = torch.cat([emb_y_0[None, None, :].expand(B, -1, -1), target_embedding], dim=1)
+        new_hidden = torch.cat([H0[:, None, :], x], dim=1)
+        R_i = torch.sigmoid(self.w_r(new_target) + self.u_r(new_hidden))
+        Z_i = torch.sigmoid(self.w_z(new_target) + self.u_z(new_hidden))
+        S_i = torch.relu(self.w(new_target) + self.u(R_i * new_hidden))
+        F_i = Z_i * S_i + (1 - Z_i) * new_hidden
+        F_matrix = F_i[:, :-1, :]
+
+        g_i = torch.sigmoid(self.g(torch.cat([x, F_matrix], dim=2)))
+        H_bar = x + g_i * F_matrix
+        logits_y = F.linear(torch.tanh(self.w_w(H_bar)), self.embed_tokens.weight)
+        logits_y_head = F.linear(torch.tanh(self.w_w(F_matrix)), self.embed_tokens.weight)
+
+        return logits_y, logits_y_head
 
     def reorder_incremental_state(self, incremental_state, new_order):
         # Load the cached state.

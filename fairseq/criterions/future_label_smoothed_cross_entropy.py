@@ -59,7 +59,7 @@ class FutureLabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         # fmt: on
 
     def forward(self, model, sample, reduce=True):
-        net_output = model(**sample['net_input'])
+        net_output = model(**sample['net_input'], target=sample['target'])
         loss, nll_loss, fu_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
         sample_size = sample['target'].size(0) if self.args.sentence_avg else sample['ntokens']
         loss = loss + self.future_lambda * fu_loss
