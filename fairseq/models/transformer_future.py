@@ -649,7 +649,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 Z_i = torch.sigmoid(self.w_z(emb_y_i) + self.u_z(Hi))
                 S_i = torch.relu(self.w(emb_y_i) + self.u(R_i * Hi))
                 prev_F_i = Z_i * S_i + (1 - Z_i) * Hi
-            Hi = features[:, 0, :]
+            Hi = features[:, 0, :] # 之前这里多了一个else，导致H0不对
             g_i = torch.sigmoid(self.g(torch.cat([Hi, prev_F_i], dim=1)))
             H_i_head = Hi + g_i * prev_F_i
             # 用H_i_head计算出当前step的词
@@ -668,19 +668,21 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         prob_y_i = torch.zeros(B, L, self.embed_tokens.weight.size(0)).to(x)
         for i in range(L):
             if i == 0:
-                # 计算F0时所需要embedding和Hi，分别是<s>的embedding和encoder output的mean
+                # 计算第一个output(y_0)的时候所需要的Prev_F
+                # 计算F(-1)时所需要embedding和Hi，分别是<s>的embedding和encoder output的mean
                 emb_y_i = self.embed_tokens.weight[0]
                 Hi = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
             # R_i: Si的一个gate，Z_i:Fi的gate, S_i: Fi的一部分，这的Fi是前一个step的Fi（F_i-1)
+            # 由于是for循环，这里的Hi和emb_yi实际上是上一个step的，严格来写应该是H_i-1和y_i-1,得到的F是Fi-1
             R_i = torch.sigmoid(self.w_r(emb_y_i) + self.u_r(Hi))
             Z_i = torch.sigmoid(self.w_z(emb_y_i) + self.u_z(Hi))
             S_i = torch.relu(self.w(emb_y_i) + self.u(R_i * Hi))
             F_i = Z_i * S_i + (1 - Z_i) * Hi
-            # 将每个Fi存储到 F_matrix
+            # 将每个F存储到 F_matrix,F_i-1 得到的output实际是y_i(F(-1)得到y0),所以直接放到相应的位置即可。
             F_matrix[:, i, :] = F_i
-            # 该step的Hi
+            # 该step的Hi,真正的Hi
             Hi = x[:, i, :]
-            # 前一个step的Fi和当前Hi拼接起来，计算Fi的遗忘门
+            # 前一个step的Fi-1和当前Hi拼接起来，计算Fi的遗忘门
             g_i = torch.sigmoid(self.g(torch.cat([Hi, F_i], dim=1)))
             # 真实要用的Hi(generate word)
             H_i_head = Hi + g_i * F_i
