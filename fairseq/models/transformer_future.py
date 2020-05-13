@@ -460,15 +460,15 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             if not args.no_token_positional_embeddings
             else None
         )
-        self.w_r = nn.Linear(embed_dim, embed_dim)
-        self.u_r = nn.Linear(embed_dim, embed_dim)
-        self.w_z = nn.Linear(embed_dim, embed_dim)
-        self.u_z = nn.Linear(embed_dim, embed_dim)
-        self.w = nn.Linear(embed_dim, embed_dim)
-        self.u = nn.Linear(embed_dim, embed_dim)
-        self.g = nn.Linear(embed_dim * 2, embed_dim)
-        self.w_w = nn.Linear(embed_dim, embed_dim)
-        self.w_o = nn.Linear(embed_dim, embed_dim)
+        self.w_r = Linear(embed_dim, embed_dim)
+        self.u_r = Linear(embed_dim, embed_dim)
+        self.w_z = Linear(embed_dim, embed_dim)
+        self.u_z = Linear(embed_dim, embed_dim)
+        self.w = Linear(embed_dim, embed_dim)
+        self.u = Linear(embed_dim, embed_dim)
+        self.g = Linear(embed_dim * 2, embed_dim)
+        self.w_w = Linear(embed_dim, embed_dim)
+        self.w_o = Linear(embed_dim, embed_dim)
 
         self.cross_self_attention = getattr(args, "cross_self_attention", False)
         self.layer_wise_attention = getattr(args, "layer_wise_attention", False)
@@ -667,17 +667,21 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             F_i = Z_i * S_i + (1 - Z_i) * Hi
             self.set_incremental_state(incremental_state, 'prev_F', F_i)
             return tmp[:, None, :], None
+        # x是decoder output
         x = features
         B = x.size(0)
+        # target 是从gold label取到的,所以第一位没有</s>
         emb_y_0 = self.embed_tokens.weight[self.eos]
+        # H0 由encoder output mean 计算而来
         H0 = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
         target_embedding = self.embed_tokens(target)
-        # 将</s>和target embedding拼接，同理H0和decoder output拼接
+        # 将</s>和target embedding拼接，同理H0和decoder output拼接，之后会一并计算F0
         new_target = torch.cat([emb_y_0[None, None, :].expand(B, -1, -1), target_embedding], dim=1)
-        new_hidden = torch.cat([H0[:, None, :], x], dim=1)
+        new_hidden = torch.cat([H0[:, None, :], x], dim=1) # 这里的x是decoder 的top layer
         R_i = torch.sigmoid(self.w_r(new_target) + self.u_r(new_hidden))
         Z_i = torch.sigmoid(self.w_z(new_target) + self.u_z(new_hidden))
         S_i = torch.relu(self.w(new_target) + self.u(R_i * new_hidden))
+        # 并行计算出所有F_{0..N}
         F_i = Z_i * S_i + (1 - Z_i) * new_hidden
         # 由于0号元素是第1个元素,最后的y_n 生成的F_n舍弃
         F_matrix = F_i[:, :-1, :]
@@ -836,3 +840,11 @@ def transformer_iwslt_de_en(args):
 @register_model_architecture("future_transformer", "future_transformer_wmt_en_de")
 def transformer_wmt_en_de(args):
     base_architecture(args)
+
+
+def Linear(in_features, out_features, bias=True):
+    m = nn.Linear(in_features, out_features, bias)
+    nn.init.xavier_uniform_(m.weight)
+    if bias:
+        nn.init.constant_(m.bias, 0.0)
+    return m
