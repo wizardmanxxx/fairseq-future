@@ -54,7 +54,7 @@ class FutureLabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         # fmt: off
         parser.add_argument('--label-smoothing', default=0., type=float, metavar='D',
                             help='epsilon for label smoothing, 0 means no label smoothing')
-        parser.add_argument('--future-loss-lambda', default=0.7, type=float, metavar='D',
+        parser.add_argument('--future-loss-lambda', default=0.3, type=float, metavar='D',
                             help='lambda for future loss')
         # fmt: on
 

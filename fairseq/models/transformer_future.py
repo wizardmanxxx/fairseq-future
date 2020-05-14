@@ -650,12 +650,12 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             prev_H = self.get_incremental_state(incremental_state, 'prev_H')
             if prev_H is None:
                 prev_H = encoder_out.encoder_out.transpose(0, 1).mean(dim=1)
-            y_prev = prev_output_tokens[:, -1]#上一个step的单词
+            y_prev = prev_output_tokens[:, -1]  # 上一个step的单词
             emb_y_i = self.embed_tokens(y_prev)
             R_i = torch.sigmoid(self.w_r(emb_y_i) + self.u_r(prev_H))
             Z_i = torch.sigmoid(self.w_z(emb_y_i) + self.u_z(prev_H))
             S_i = torch.relu(self.w(emb_y_i) + self.u(R_i * prev_H))
-            prev_F_i = Z_i * S_i + (1 - Z_i) * prev_H#上一个step的Fi
+            prev_F_i = Z_i * S_i + (1 - Z_i) * prev_H  # 上一个step的Fi
 
             Hi = features[:, 0, :]
             g_i = torch.sigmoid(self.g(torch.cat([Hi, prev_F_i], dim=1)))
@@ -838,6 +838,25 @@ def transformer_iwslt_de_en(args):
 @register_model_architecture("future_transformer", "future_transformer_wmt_en_de")
 def transformer_wmt_en_de(args):
     base_architecture(args)
+
+
+@register_model_architecture("future_transformer", "future_transformer_vaswani_wmt_en_de_big")
+def transformer_vaswani_wmt_en_de_big(args):
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 1024)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 4096)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 16)
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
+    args.dropout = getattr(args, "dropout", 0.3)
+    base_architecture(args)
+
+
+@register_model_architecture("future_transformer", "future_transformer_vaswani_wmt_en_fr_big")
+def transformer_vaswani_wmt_en_fr_big(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    transformer_vaswani_wmt_en_de_big(args)
 
 
 def Linear(in_features, out_features, bias=True):
