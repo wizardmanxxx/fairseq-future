@@ -685,7 +685,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         F_i = Z_i * S_i + (1 - Z_i) * new_hidden
         # 由于0号元素是第1个元素,最后的y_n 生成的F_n舍弃
         F_matrix = F_i[:, :-1, :]
-        F.dropout(F_matrix, p=self.dropout, training=self.training)
+        F_matrix = F.dropout(F_matrix, p=self.dropout, training=self.training)
         g_i = torch.sigmoid(self.g(torch.cat([x, F_matrix], dim=2)))
         # 实际output用的是prev_F 和 Hidden_i的结合
         H_bar = x + g_i * F_matrix
