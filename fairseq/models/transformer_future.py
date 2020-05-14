@@ -677,7 +677,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         target_embedding = self.embed_tokens(target)
         # 将</s>和target embedding拼接，同理H0和decoder output拼接，之后会一并计算F0
         new_target = torch.cat([emb_y_0[None, None, :].expand(B, -1, -1), target_embedding], dim=1)
-        new_hidden = torch.cat([H0[:, None, :], x], dim=1) # 这里的x是decoder 的top layer
+        new_hidden = torch.cat([H0[:, None, :], x], dim=1)  # 这里的x是decoder 的top layer
         R_i = torch.sigmoid(self.w_r(new_target) + self.u_r(new_hidden))
         Z_i = torch.sigmoid(self.w_z(new_target) + self.u_z(new_hidden))
         S_i = torch.relu(self.w(new_target) + self.u(R_i * new_hidden))
@@ -685,7 +685,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         F_i = Z_i * S_i + (1 - Z_i) * new_hidden
         # 由于0号元素是第1个元素,最后的y_n 生成的F_n舍弃
         F_matrix = F_i[:, :-1, :]
-
+        F.dropout(F_matrix, p=self.dropout, training=self.training)
         g_i = torch.sigmoid(self.g(torch.cat([x, F_matrix], dim=2)))
         # 实际output用的是prev_F 和 Hidden_i的结合
         H_bar = x + g_i * F_matrix
